@@ -40,13 +40,14 @@ tmux select-layout -t $SESSION:1 tiled
 # 窗口 2: 导航大脑与飞控执行
 # ====================================================
 tmux new-window -t $SESSION:2 -n "nav_and_control"
-# 2.0: 启动 Ego-Planner (记得按上文修改参数压扁地图) + 你刚写的 ego_controller_node
+
+# Pane 2.0: 启动整合包（包含：Ego + 翻译官 + C++状态机主控）
+# 现在运行这一个 launch，飞机就会尝试解锁、起飞并跑完流程
 tmux send-keys -t $SESSION:2.0 "sleep 12; source ${MAIN_WS}/devel/setup.bash; roslaunch uav_navigation ego_nav.launch" C-m
 
-# 2.1: 启动你写的 Mock Testing python 脚本，用来发目标点！
+# Pane 2.1: 建议改为监控 ego_controller 的状态，看看导航到哪一步了
 tmux split-window -v -t $SESSION:2
-tmux send-keys -t $SESSION:2.1 "sleep 15; source ${MAIN_WS}/devel/setup.bash; rosrun uav_navigation test_send_goal.py" C-m
-tmux select-layout -t $SESSION:2 tiled
+tmux send-keys -t $SESSION:2.1 "sleep 15; rostopic echo /ego_controller/status" C-m
 
 # ====================================================
 # 窗口 3: 监控窗口

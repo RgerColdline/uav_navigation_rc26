@@ -41,7 +41,13 @@
   </node>
   
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find uav_navigation)/launch/ego.rviz" required="false" />
+ 
+  <!-- 加载比赛参数 -->
+  <rosparam file="$(find uav_navigation)/config/mission_params.yaml" command="load" />
 
   <!-- 注意3：在这里直接启动你用 C++ 写的 ego_controller_node -->
   <node pkg="uav_navigation" name="ego_controller_node" type="ego_controller_node" output="screen" />
+   <!-- 2. 【新增】启动 C++ 主控状态机节点（指挥官：全自动比赛逻辑） -->
+  <!-- 只有加上这一行，你写的那个 MissionController 才会运行 -->
+  <node pkg="uav_navigation" name="demo_fsm_node" type="demo_fsm_node" output="screen" />
 </launch>
