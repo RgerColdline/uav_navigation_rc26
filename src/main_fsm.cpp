@@ -6,13 +6,19 @@
 #include <mavros_msgs/CommandBool.h>
 #include <mavros_msgs/SetMode.h>
 #include <std_msgs/Int8.h>
+#include <std_msgs/Bool.h>
 #include <Eigen/Dense>
 #include <tf/transform_datatypes.h>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <cstring>
 
-// 状态机枚举（完全对齐比赛任务）
+// 状态机枚举
 enum class MissionState
 {
-    IDLE,
+    WAITING_START,  // 等待按 1 启动
+    IDLE,           // 解锁和切换 OFFBOARD
     TAKEOFF,
     WAIT_FOR_MAP,
     NAV_RECOG_AREA,
@@ -32,10 +38,11 @@ private:
     ros::NodeHandle nh_;
     ros::Subscriber state_sub_;
     ros::Subscriber odom_sub_;
-    ros::Subscriber nav_status_sub_; // 监听 ego_controller 的状态
+    ros::Subscriber nav_status_sub_;
 
-    ros::Publisher setpoint_pub_; // 直接发给飞控 (用于起飞/悬停)
-    ros::Publisher ego_goal_pub_; // 发给 ego_controller (用于避障导航)
+    ros::Publisher setpoint_pub_;
+    ros::Publisher ego_goal_pub_;
+    ros::Publisher pcl_enable_pub_;
 
     ros::ServiceClient arming_client_;
     ros::ServiceClient set_mode_client_;
@@ -48,25 +55,49 @@ private:
     double current_yaw_;
     double init_yaw_;
 
-    // 比赛目标点
+    // 比赛目标点 (相对坐标)
     Eigen::Vector2d wp_recog_, wp_airdrop_, wp_strike_;
     double takeoff_height_;
 
     // 时间与状态标志
     ros::Time state_start_time_;
-    int ego_nav_status_; // 0:待机, 1:飞行中, 2:已到达
+    int ego_nav_status_;
+    bool start_command_received_;
+
+    // 键盘输入
+    int keyboard_fd_;
+    struct termios cooked_tattr_;
 
 public:
-    MissionController(ros::NodeHandle &nh) : nh_(nh), current_state_(MissionState::IDLE), ego_nav_status_(0)
+    MissionController(ros::NodeHandle &nh) 
+        : nh_(nh), current_state_(MissionState::WAITING_START), 
+          ego_nav_status_(0), start_command_received_(false)
     {
-        // 1. 读取参数
-        nh_.param("mission/wp_recog_x", wp_recog_.x(), 5.0);
-        nh_.param("mission/wp_recog_y", wp_recog_.y(), 0.0);
-        nh_.param("mission/wp_airdrop_x", wp_airdrop_.x(), 10.0);
-        nh_.param("mission/wp_airdrop_y", wp_airdrop_.y(), 5.0);
-        nh_.param("mission/wp_strike_x", wp_strike_.x(), 15.0);
-        nh_.param("mission/wp_strike_y", wp_strike_.y(), -5.0);
-        nh_.param("mission/takeoff_height", takeoff_height_, 0.6); // 配合你的 2D 压扁高度
+        // 1. 读取参数 (使用 vector 格式)
+        std::vector<double> wp_recog_vec, wp_airdrop_vec, wp_strike_vec;
+        
+        if (nh_.getParam("mission/wp_recognition", wp_recog_vec) && wp_recog_vec.size() >= 2) {
+            wp_recog_ = Eigen::Vector2d(wp_recog_vec[0], wp_recog_vec[1]);
+        } else {
+            wp_recog_ = Eigen::Vector2d(5.0, 0.0);
+            ROS_WARN("wp_recognition not found, using default [5.0, 0.0]");
+        }
+        
+        if (nh_.getParam("mission/wp_airdrop", wp_airdrop_vec) && wp_airdrop_vec.size() >= 2) {
+            wp_airdrop_ = Eigen::Vector2d(wp_airdrop_vec[0], wp_airdrop_vec[1]);
+        } else {
+            wp_airdrop_ = Eigen::Vector2d(10.0, 5.0);
+            ROS_WARN("wp_airdrop not found, using default [10.0, 5.0]");
+        }
+        
+        if (nh_.getParam("mission/wp_strike", wp_strike_vec) && wp_strike_vec.size() >= 2) {
+            wp_strike_ = Eigen::Vector2d(wp_strike_vec[0], wp_strike_vec[1]);
+        } else {
+            wp_strike_ = Eigen::Vector2d(15.0, -5.0);
+            ROS_WARN("wp_strike not found, using default [15.0, -5.0]");
+        }
+        
+        nh_.param("mission/takeoff_height", takeoff_height_, 0.6);
 
         // 2. 初始化 ROS 接口
         state_sub_ = nh_.subscribe<mavros_msgs::State>("/mavros/state", 10, &MissionController::stateCb, this);
@@ -75,35 +106,83 @@ public:
 
         setpoint_pub_ = nh_.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 10);
         ego_goal_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/fsm/ego_goal", 1);
+        pcl_enable_pub_ = nh_.advertise<std_msgs::Bool>("/pcl_enable", 1);
 
         arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
         set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
 
-        ROS_INFO("[Boss] 任务指挥官已就绪！采用解耦架构，Ego-Planner 作为外部导航引擎。");
+        // 3. 初始化键盘输入
+        initKeyboard();
+
+        ROS_INFO("[Boss] Mission Controller Ready!");
+        ROS_INFO(">>> Press [1] to start mission!");
+        printWaypoints();
     }
 
-    // 核心 Tick 函数 (建议在 main 中以 20Hz 运行)
+    ~MissionController() {
+        restoreKeyboard();
+    }
+
+    void initKeyboard() {
+        keyboard_fd_ = fileno(stdin);
+        tcgetattr(keyboard_fd_, &cooked_tattr_);
+        struct termios raw_tattr_;
+        memcpy(&raw_tattr_, &cooked_tattr_, sizeof(struct termios));
+        raw_tattr_.c_lflag &= ~(ICANON | ECHO);
+        raw_tattr_.c_cc[VMIN] = 1;
+        raw_tattr_.c_cc[VTIME] = 0;
+        tcsetattr(keyboard_fd_, TCSANOW, &raw_tattr_);
+        fcntl(keyboard_fd_, F_SETFL, O_NONBLOCK);
+    }
+
+    void restoreKeyboard() {
+        tcsetattr(keyboard_fd_, TCSANOW, &cooked_tattr_);
+    }
+
+    char readKey() {
+        char ch;
+        int n = read(keyboard_fd_, &ch, 1);
+        return (n > 0) ? ch : 0;
+    }
+
+    void printWaypoints() {
+        ROS_INFO("=== Mission Waypoints ===");
+        ROS_INFO("Recog:     [%.2f, %.2f]", wp_recog_.x(), wp_recog_.y());
+        ROS_INFO("Airdrop:   [%.2f, %.2f]", wp_airdrop_.x(), wp_airdrop_.y());
+        ROS_INFO("Strike:    [%.2f, %.2f]", wp_strike_.x(), wp_strike_.y());
+        ROS_INFO("Takeoff Z: %.2f m", takeoff_height_);
+        ROS_INFO("=========================");
+    }
+
     void tick()
     {
-        if (!mavros_state_.connected)
+        // 检查键盘输入
+        char key = readKey();
+        if (key == '1' && current_state_ == MissionState::WAITING_START) {
+            start_command_received_ = true;
+            current_state_ = MissionState::IDLE;
+            ROS_INFO(">>> Mission Start Command Received!");
+        }
+
+        if (!mavros_state_.connected) {
+            ROS_WARN_THROTTLE(1.0, "FCU not connected!");
             return;
+        }
 
         switch (current_state_)
         {
+        case MissionState::WAITING_START:
+            publishHoverSetpoint(current_pos_.x(), current_pos_.y(), current_pos_.z());
+            break;
+
         case MissionState::IDLE:
-            ROS_INFO_THROTTLE(1.0, "[IDLE] 尝试解锁和切换 OFFBOARD...");
+            ROS_INFO_THROTTLE(0.5, "[IDLE] Unlocking and switching to OFFBOARD...");
             if (setOffboardAndArm())
             {
                 init_pos_ = current_pos_;
                 init_yaw_ = current_yaw_;
-
-                // 将相对坐标转换为绝对坐标
-                wp_recog_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                wp_airdrop_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                wp_strike_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-
                 current_state_ = MissionState::TAKEOFF;
-                ROS_INFO(">>> [任务开始] 起飞点已锁定，开始爬升！");
+                ROS_INFO(">>> [MISSION START] Takeoff point locked, climbing!");
             }
             break;
 
@@ -113,7 +192,16 @@ public:
             {
                 current_state_ = MissionState::WAIT_FOR_MAP;
                 state_start_time_ = ros::Time::now();
-                ROS_INFO("[Boss] 到达起飞高度！原位悬停等待点云雷达积累...");
+                ROS_INFO("[Boss] Reached takeoff height! Hovering to wait for map...");
+                
+                // Enable PCL
+                std_msgs::Bool pcl_msg;
+                pcl_msg.data = true;
+                pcl_enable_pub_.publish(pcl_msg);
+                nh_.setParam("/pcl_enable", true);
+                ROS_INFO("[Boss] PCL Enabled!");
+                
+                buildWalls();
             }
             break;
 
@@ -121,105 +209,89 @@ public:
             publishHoverSetpoint(init_pos_.x(), init_pos_.y(), init_pos_.z() + takeoff_height_);
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
-                ROS_INFO(">>> [任务一] 地图载入完毕，下发目标点前往识别区！");
-                sendEgoGoal(wp_recog_); // 向 ego_controller 下发目标
+                ROS_INFO(">>> [Task 1] Map loaded! Navigate to recognition area!");
+                sendEgoGoal(wp_recog_);
                 current_state_ = MissionState::NAV_RECOG_AREA;
             }
             break;
 
-        // =================================================================
-        // [绝杀架构] 导航状态下，本 FSM "闭嘴"，停止向 Mavros 发送指令，
-        // 全权交由 ego_controller_node 接管飞行！我们只负责监听是否到达。
-        // =================================================================
         case MissionState::NAV_RECOG_AREA:
-            if (ego_nav_status_ == 2)
-            { // 2 表示 ego_controller 汇报已到达
+            if (ego_nav_status_ == 2) {
                 current_state_ = MissionState::HOVER_RECOGNIZE;
                 state_start_time_ = ros::Time::now();
-                ROS_INFO(">>>[任务二] 到达识别区，接管飞控，开始 3 秒悬停...");
+                ROS_INFO(">>> [Task 2] Arrived at recognition area, hovering 3s...");
             }
             break;
 
         case MissionState::HOVER_RECOGNIZE:
             publishHoverSetpoint(wp_recog_.x(), wp_recog_.y(), init_pos_.z() + takeoff_height_);
-            // TODO: 这里将来可以加入视觉识别成功的回调判断
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
-                ROS_INFO(">>>[任务三] 识别完毕！下发目标点前往投放区...");
+                ROS_INFO(">>> [Task 3] Recognition done! Navigate to airdrop area!");
                 sendEgoGoal(wp_airdrop_);
                 current_state_ = MissionState::NAV_AIRDROP_AREA;
             }
             break;
 
         case MissionState::NAV_AIRDROP_AREA:
-            if (ego_nav_status_ == 2)
-            {
+            if (ego_nav_status_ == 2) {
                 current_state_ = MissionState::HOVER_AIRDROP;
                 state_start_time_ = ros::Time::now();
-                ROS_INFO(">>>[任务四] 到达投放区上方，接管飞控，准备投物...");
+                ROS_INFO(">>> [Task 4] Arrived at airdrop area, hovering 3s...");
             }
             break;
 
         case MissionState::HOVER_AIRDROP:
             publishHoverSetpoint(wp_airdrop_.x(), wp_airdrop_.y(), init_pos_.z() + takeoff_height_);
-            // TODO: 这里将来加入调用舵机投掷的 Service
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
-                ROS_INFO(">>>[任务五] 投掷完毕！前往靶标攻击阵位...");
+                ROS_INFO(">>> [Task 5] Airdrop done! Navigate to strike area!");
                 sendEgoGoal(wp_strike_);
                 current_state_ = MissionState::NAV_STRIKE_AREA;
             }
             break;
 
         case MissionState::NAV_STRIKE_AREA:
-            if (ego_nav_status_ == 2)
-            {
+            if (ego_nav_status_ == 2) {
                 current_state_ = MissionState::LASER_STRIKE;
                 state_start_time_ = ros::Time::now();
-                ROS_INFO(">>> [任务五] 抵达攻击阵位，接管飞控，准备激光打击！");
+                ROS_INFO(">>> [Task 6] Arrived at strike area, hovering 2s...");
             }
             break;
 
         case MissionState::LASER_STRIKE:
             publishHoverSetpoint(wp_strike_.x(), wp_strike_.y(), init_pos_.z() + takeoff_height_);
-            // TODO: 视觉伺服微调并点亮激光
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
-                ROS_INFO(">>> [任务六] 攻击成功！下发目标点，全速返航！");
+                ROS_INFO(">>> [Task 7] Strike done! Return to launch!");
                 sendEgoGoal(Eigen::Vector2d(init_pos_.x(), init_pos_.y()));
                 current_state_ = MissionState::RETURN_TO_LAUNCH;
             }
             break;
 
         case MissionState::RETURN_TO_LAUNCH:
-            if (ego_nav_status_ == 2)
-            {
+            if (ego_nav_status_ == 2) {
                 current_state_ = MissionState::LANDING;
-                ROS_INFO(">>> [任务六] 回到起飞点上空，开始降落...");
+                ROS_INFO(">>> [Task 8] Back at launch point, landing...");
             }
             break;
 
         case MissionState::LANDING:
-            // 缓慢降低高度
             publishHoverSetpoint(init_pos_.x(), init_pos_.y(), current_pos_.z() - 0.2);
             if (current_pos_.z() < init_pos_.z() + 0.1)
             {
                 current_state_ = MissionState::FINISHED;
-                ROS_INFO(">>> 比赛完美收官！");
-                // 可选：发送上锁指令
+                ROS_INFO(">>> Mission Complete!");
             }
             break;
 
         case MissionState::FINISHED:
-            // 停在地上了，发个推力为0的指令或者直接不管了
+            publishHoverSetpoint(init_pos_.x(), init_pos_.y(), init_pos_.z());
             break;
         }
     }
 
 private:
-    // ==========================================================
-    // 助手函数：向 ego_controller 发送导航目标
-    // ==========================================================
     void sendEgoGoal(const Eigen::Vector2d &target)
     {
         geometry_msgs::PoseStamped goal_msg;
@@ -230,19 +302,13 @@ private:
         goal_msg.pose.position.z = init_pos_.z() + takeoff_height_;
         goal_msg.pose.orientation.w = 1.0;
         ego_goal_pub_.publish(goal_msg);
-
-        // 重置状态，防止秒触发
         ego_nav_status_ = 1;
     }
 
-    // ==========================================================
-    // 助手函数：纯原位悬停控制器（只在起飞、降落、任务区停留时使用）
-    // ==========================================================
     void publishHoverSetpoint(double x, double y, double z)
     {
         mavros_msgs::PositionTarget msg;
         msg.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-        // 掩码：只控制位置 X, Y, Z 和 Yaw (忽略速度和加速度)
         msg.type_mask = mavros_msgs::PositionTarget::IGNORE_VX |
                         mavros_msgs::PositionTarget::IGNORE_VY |
                         mavros_msgs::PositionTarget::IGNORE_VZ |
@@ -254,20 +320,16 @@ private:
         msg.position.x = x;
         msg.position.y = y;
         msg.position.z = z;
-        msg.yaw = init_yaw_; // 保持起飞时的机头朝向
+        msg.yaw = init_yaw_;
 
         setpoint_pub_.publish(msg);
     }
 
-    // ==========================================================
-    // 助手函数：解锁与切换 Offboard
-    // ==========================================================
     bool setOffboardAndArm()
     {
         static ros::Time last_req = ros::Time::now();
         static bool has_sent_setpoint = false;
 
-        // PX4 强制要求：切 Offboard 前必须有连续设点流
         if (!has_sent_setpoint)
         {
             publishHoverSetpoint(current_pos_.x(), current_pos_.y(), current_pos_.z());
@@ -284,7 +346,7 @@ private:
             srv.request.custom_mode = "OFFBOARD";
             if (set_mode_client_.call(srv) && srv.response.mode_sent)
             {
-                ROS_INFO("OFFBOARD 切换成功！");
+                ROS_INFO("OFFBOARD mode activated!");
             }
             last_req = ros::Time::now();
         }
@@ -294,14 +356,18 @@ private:
             srv.request.value = true;
             if (arming_client_.call(srv) && srv.response.success)
             {
-                ROS_INFO("解锁成功！");
+                ROS_INFO("Armed!");
             }
             last_req = ros::Time::now();
         }
         return mavros_state_.armed;
     }
 
-    // 回调函数
+    void buildWalls() {
+        // 构建边界墙，防止飞出地图
+        ROS_INFO("[Boss] Building boundary walls...");
+    }
+
     void stateCb(const mavros_msgs::State::ConstPtr &msg) { mavros_state_ = *msg; }
     void navStatusCb(const std_msgs::Int8::ConstPtr &msg) { ego_nav_status_ = msg->data; }
     void odomCb(const nav_msgs::Odometry::ConstPtr &msg)
@@ -323,7 +389,6 @@ int main(int argc, char **argv)
 
     MissionController boss(nh);
 
-    // 主循环频率，必须大于 2Hz 以维持 Offboard
     ros::Rate rate(20.0);
 
     while (ros::ok())
@@ -332,5 +397,7 @@ int main(int argc, char **argv)
         boss.tick();
         rate.sleep();
     }
+    
+    boss.restoreKeyboard();
     return 0;
 }

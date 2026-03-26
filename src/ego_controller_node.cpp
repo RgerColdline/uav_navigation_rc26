@@ -97,7 +97,8 @@ int main(int argc, char **argv)
     ros::Subscriber traj_sub = nh.subscribe("/position_cmd", 10, trajCmdCallback);
 
     mavros_cmd_pub = nh.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 10);
-    ego_goal_pub = nh.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);
+    // 修复：目标点话题必须与 EGO-Planner 的 flight_type=1 匹配
+    ego_goal_pub = nh.advertise<geometry_msgs::PoseStamped>("/ego_planner/goal", 1);
     nav_status_pub = nh.advertise<std_msgs::Int8>("/ego_controller/status", 10);
 
     ros::Rate rate(20); // 20Hz 主循环

@@ -58,9 +58,8 @@ target_link_libraries(ego_controller_node ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 # ==========================================================
 # 3. 测试示例模块 C：FSM Demo (交给队友 B 参考的范例)
-#    建议把上一问的 main_fsm.cpp 重命名为 demo_fsm_node.cpp
 # ==========================================================
-add_executable(demo_fsm_node src/demo_fsm_node.cpp)
+add_executable(demo_fsm_node src/main_fsm.cpp)
 target_link_libraries(demo_fsm_node ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 
