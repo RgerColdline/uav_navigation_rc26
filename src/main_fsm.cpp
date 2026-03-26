@@ -8,13 +8,11 @@
 #include <std_msgs/Int8.h>
 #include <Eigen/Dense>
 #include <tf/transform_datatypes.h>
-#include <thread>
 #include <iostream>
 
 // 状态机枚举（完全对齐比赛任务）
 enum class MissionState
 {
-    WAIT_FOR_START, // 等待键盘按1启动
     IDLE,
     TAKEOFF,
     WAIT_FOR_MAP,
@@ -59,13 +57,10 @@ private:
     ros::Time state_start_time_;
     int ego_nav_status_; // 0:待机, 1:飞行中, 2:已到达
 
-    // 启动标志位
-    bool is_start_pressed_;
-
 public:
-    MissionController(ros::NodeHandle &nh) : nh_(nh), current_state_(MissionState::WAIT_FOR_START), ego_nav_status_(0), is_start_pressed_(false)
+    MissionController(ros::NodeHandle &nh) : nh_(nh), current_state_(MissionState::IDLE), ego_nav_status_(0)
     {
-        // 1. 读取参数
+        // 1. 【完美替换】使用你指定的读取参数方式
         nh_.param("mission/wp_recog_x", wp_recog_.x(), 5.0);
         nh_.param("mission/wp_recog_y", wp_recog_.y(), 0.0);
         nh_.param("mission/wp_airdrop_x", wp_airdrop_.x(), 10.0);
@@ -85,33 +80,7 @@ public:
         arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
         set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
 
-        ROS_INFO("[Boss] 任务指挥官已就绪！采用解耦架构，Ego-Planner 作为外部导航引擎。");
-
-        // 开启监听键盘的独立线程
-        std::thread(&MissionController::keyboardThread, this).detach();
-    }
-
-    void keyboardThread()
-    {
-        int cmd;
-        std::cout << "\n\n*************************************************************" << std::endl;
-        std::cout << "  [终极指令] 系统初始化完成！等待 Gazebo 和 雷达 加载！" << std::endl;
-        std::cout << "  >>>> 请在终端输入 1 并回车，授权无人机起飞！ <<<<" << std::endl;
-        std::cout << "*************************************************************\n\n"
-                  << std::endl;
-        while (std::cin >> cmd)
-        {
-            if (cmd == 1)
-            {
-                is_start_pressed_ = true;
-                ROS_INFO("[Boss] 收到起飞指令！开始任务执行流！");
-                break;
-            }
-            else
-            {
-                ROS_WARN("无效指令，请输入 1 确认起飞。");
-            }
-        }
+        ROS_INFO("[Boss] 任务指挥官已就绪！各项比赛参数读取无误。");
     }
 
     // 核心 Tick 函数
@@ -122,13 +91,6 @@ public:
 
         switch (current_state_)
         {
-        case MissionState::WAIT_FOR_START:
-            if (is_start_pressed_)
-            {
-                current_state_ = MissionState::IDLE;
-            }
-            break;
-
         case MissionState::IDLE:
             ROS_WARN_THROTTLE(0.5, "[IDLE] 尝试解锁和切换 OFFBOARD...");
             // 【完全继承老代码逻辑】
@@ -137,9 +99,9 @@ public:
                 init_pos_ = current_pos_;
                 init_yaw_ = current_yaw_;
 
-                param_.wp_recog += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                param_.wp_airdrop += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                param_.wp_strike += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_recog_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_airdrop_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_strike_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
 
                 current_state_ = MissionState::TAKEOFF;
                 ROS_INFO(">>>[任务开始] 起飞点已锁定，开始爬升！");
@@ -162,7 +124,7 @@ public:
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
                 ROS_INFO(">>> [任务一] 地图载入完毕，下发目标点前往识别区！");
-                sendEgoGoal(param_.wp_recog); // 向 ego_controller 下发目标
+                sendEgoGoal(wp_recog_); // 向 ego_controller 下发目标
                 current_state_ = MissionState::NAV_RECOG_AREA;
             }
             break;
@@ -178,11 +140,11 @@ public:
             break;
 
         case MissionState::HOVER_RECOGNIZE:
-            publishSetpoint(param_.wp_recog, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_recog_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
                 ROS_INFO(">>>[任务三] 识别完毕！下发目标点前往投放区...");
-                sendEgoGoal(param_.wp_airdrop);
+                sendEgoGoal(wp_airdrop_);
                 current_state_ = MissionState::NAV_AIRDROP_AREA;
             }
             break;
@@ -198,11 +160,11 @@ public:
             break;
 
         case MissionState::HOVER_AIRDROP:
-            publishSetpoint(param_.wp_airdrop, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_airdrop_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
                 ROS_INFO(">>>[任务五] 投掷完毕！前往靶标攻击阵位...");
-                sendEgoGoal(param_.wp_strike);
+                sendEgoGoal(wp_strike_);
                 current_state_ = MissionState::NAV_STRIKE_AREA;
             }
             break;
@@ -218,10 +180,10 @@ public:
             break;
 
         case MissionState::LASER_STRIKE:
-            publishSetpoint(param_.wp_strike, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_strike_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
-                ROS_INFO(">>> [任务六] 攻击成功！下发目标点，全速返航！");
+                ROS_INFO(">>>[任务六] 攻击成功！下发目标点，全速返航！");
                 sendEgoGoal(Eigen::Vector2d(init_pos_.x(), init_pos_.y()));
                 current_state_ = MissionState::RETURN_TO_LAUNCH;
             }
@@ -275,15 +237,22 @@ private:
         msg.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED; // 即 1
         msg.type_mask = 3040;                                                // 核心！同时监听位置和速度！
 
-        msg.position.x = xy.x();
-        msg.position.y = xy.y();
-        msg.position.z = z;
+        // 【致命 Bug 终极修复】ENU 到 NED 的十字翻转！
+        msg.position.x = xy.y();
+        msg.position.y = xy.x();
+        msg.position.z = -z;
 
-        msg.velocity.x = vel_xy.x();
-        msg.velocity.y = vel_xy.y();
+        msg.velocity.x = vel_xy.y();
+        msg.velocity.y = vel_xy.x();
         msg.velocity.z = 0;
 
-        msg.yaw = yaw;
+        double yaw_ned = M_PI / 2.0 - yaw;
+        while (yaw_ned > M_PI)
+            yaw_ned -= 2.0 * M_PI;
+        while (yaw_ned < -M_PI)
+            yaw_ned += 2.0 * M_PI;
+        msg.yaw = yaw_ned;
+
         setpoint_pub_.publish(msg);
     }
 
@@ -322,10 +291,6 @@ private:
             {
                 ROS_INFO("[setOffboardAndArm] OFFBOARD 切换成功！");
             }
-            else
-            {
-                ROS_WARN("[setOffboardAndArm] OFFBOARD 切换失败，重试...");
-            }
             last_mode_req = ros::Time::now();
         }
 
@@ -338,10 +303,6 @@ private:
             if (arming_client_.call(srv) && srv.response.success)
             {
                 ROS_INFO("[setOffboardAndArm] 解锁成功！");
-            }
-            else
-            {
-                ROS_WARN("[setOffboardAndArm] 解锁服务调用失败，请检查 PX4 安全条件");
             }
             last_arm_req = ros::Time::now();
         }
@@ -368,6 +329,28 @@ int main(int argc, char **argv)
     setlocale(LC_ALL, "");
     ros::init(argc, argv, "main_fsm_node");
     ros::NodeHandle nh("~");
+
+    // 【绝杀修复】阻断式等待：加载完参数后，程序死等键盘输入，绝对不刷屏！
+    int cmd = 0;
+    std::cout << "\n\n*************************************************************" << std::endl;
+    std::cout << "  [终极指令] 比赛参数加载完毕！等待 Gazebo 和 雷达 加载！" << std::endl;
+    std::cout << "  >>>> 请在终端输入 1 并回车，正式授权无人机起飞！ <<<<" << std::endl;
+    std::cout << "*************************************************************\n\n"
+              << std::endl;
+
+    while (ros::ok())
+    {
+        std::cin >> cmd;
+        if (cmd == 1)
+        {
+            ROS_INFO("[Boss] 收到起飞指令！开始任务执行流！");
+            break;
+        }
+        else
+        {
+            ROS_WARN("无效指令，请输入 1 确认起飞。");
+        }
+    }
 
     MissionController boss(nh);
     ros::Rate rate(20.0);
