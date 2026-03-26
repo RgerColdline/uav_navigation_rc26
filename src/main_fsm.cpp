@@ -355,7 +355,10 @@ private:
         ego_nav_status_ = 1;
     }
 
-    void publishHoverSetpoint(double x, double y, double z)
+    // ==========================================================
+    // 助手函数：纯原位悬停控制器（只在起飞、降落、任务区停留时使用）
+    // ==========================================================
+    void publishHoverSetpoint(double x_enu, double y_enu, double z_enu)
     {
         mavros_msgs::PositionTarget msg;
         // 【尊重原著】跟 ego_controller 严格保持一致的坐标系！
@@ -370,14 +373,17 @@ private:
                         mavros_msgs::PositionTarget::IGNORE_AFZ |
                         mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
 
-        // 【修复】位置坐标也需要 ENU 转 NED
-        // ENU -> NED: x_ned = y_enu, y_ned = x_enu, z_ned = -z_enu
-        msg.position.x = y;  // NED x = ENU y
-        msg.position.y = x;  // NED y = ENU x
-        msg.position.z = -z; // NED z = -ENU z
+        // 【史诗级纠偏】同样必须执行 ENU -> NED 转换！
+        msg.position.x = y_enu;  // x_ned = y_enu
+        msg.position.y = x_enu;  // y_ned = x_enu
+        msg.position.z = -z_enu; // z_ned = -z_enu
 
-        // 【修复】yaw 也需要转换：yaw_ned = PI/2 - yaw_enu
-        msg.yaw = M_PI_2 - current_yaw_;
+        double yaw_ned = M_PI / 2.0 - init_yaw_;
+        while (yaw_ned > M_PI)
+            yaw_ned -= 2.0 * M_PI;
+        while (yaw_ned < -M_PI)
+            yaw_ned += 2.0 * M_PI;
+        msg.yaw = yaw_ned;
 
         setpoint_pub_.publish(msg);
     }
