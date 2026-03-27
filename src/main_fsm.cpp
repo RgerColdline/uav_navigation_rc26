@@ -137,9 +137,9 @@ public:
                 init_pos_ = current_pos_;
                 init_yaw_ = current_yaw_;
 
-                param_.wp_recog += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                param_.wp_airdrop += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
-                param_.wp_strike += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_recog_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_airdrop_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
+                wp_strike_ += Eigen::Vector2d(init_pos_.x(), init_pos_.y());
 
                 current_state_ = MissionState::TAKEOFF;
                 ROS_INFO(">>>[任务开始] 起飞点已锁定，开始爬升！");
@@ -162,7 +162,7 @@ public:
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
                 ROS_INFO(">>> [任务一] 地图载入完毕，下发目标点前往识别区！");
-                sendEgoGoal(param_.wp_recog); // 向 ego_controller 下发目标
+                sendEgoGoal(wp_recog_); // 向 ego_controller 下发目标
                 current_state_ = MissionState::NAV_RECOG_AREA;
             }
             break;
@@ -178,11 +178,11 @@ public:
             break;
 
         case MissionState::HOVER_RECOGNIZE:
-            publishSetpoint(param_.wp_recog, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_recog_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
                 ROS_INFO(">>>[任务三] 识别完毕！下发目标点前往投放区...");
-                sendEgoGoal(param_.wp_airdrop);
+                sendEgoGoal(wp_airdrop_);
                 current_state_ = MissionState::NAV_AIRDROP_AREA;
             }
             break;
@@ -198,11 +198,11 @@ public:
             break;
 
         case MissionState::HOVER_AIRDROP:
-            publishSetpoint(param_.wp_airdrop, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_airdrop_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0)
             {
                 ROS_INFO(">>>[任务五] 投掷完毕！前往靶标攻击阵位...");
-                sendEgoGoal(param_.wp_strike);
+                sendEgoGoal(wp_strike_);
                 current_state_ = MissionState::NAV_STRIKE_AREA;
             }
             break;
@@ -218,7 +218,7 @@ public:
             break;
 
         case MissionState::LASER_STRIKE:
-            publishSetpoint(param_.wp_strike, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
+            publishSetpoint(wp_strike_, Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0)
             {
                 ROS_INFO(">>> [任务六] 攻击成功！下发目标点，全速返航！");
