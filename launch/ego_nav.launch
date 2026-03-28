@@ -11,7 +11,7 @@
     <!-- 注意 2：空间降维核心封印！-->
     <!-- 如果你的定高是 0.6m，这里设置范围刚好卡住这层空间 -->
   <!-- 注意 2：空间降维核心封印！-->
-    <arg name="map_size_z_" value="1.50"/>  <!-- 天花板高度 1.5 米 -->
+    <arg name="map_size_z_" value="2.0"/>  <!-- 天花板高度 1.5 米 -->
     <arg name="ground_height" value="0.0"/> <!-- 地板高度设为 0，防止把起飞点当成地下 -->
 
     <!-- 里程计和点云话题 -->
@@ -33,7 +33,7 @@
     <arg name="swarm_clearance" value="0.5" />
     <arg name="dist" value="0.20" />
     <arg name="flight_type" value="1" />
-    <arg name="realworld_experiment" value="true" />
+    <arg name="realworld_experiment" value="false" />
   </include>
 
   <node pkg="ego_planner" name="traj_server" type="traj_server" output="screen" respawn="true">
