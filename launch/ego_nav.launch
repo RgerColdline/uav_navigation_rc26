@@ -16,8 +16,8 @@
 
     <!-- 里程计和点云话题 -->
     <arg name="odometry_topic" value="/mavros/local_position/odom"/>
-    <!-- 这里接收的是你第一步写的"加厚点云"的发布话题，假设还是 /cloud_registered -->
-    <arg name="cloud_topic" value="/cloud_registered"/>
+    <!-- 这里接收加厚后的点云发布话题 -->
+    <arg name="cloud_topic" value="/cloud_pcl"/>
     <arg name="scan_topic" value=""/>
 
     <arg name="max_vel" value="1.0" />

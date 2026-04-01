@@ -52,7 +52,7 @@ int main(int argc, char **argv)
     ros::NodeHandle nh;
 
     ros::Subscriber sub = nh.subscribe("/projected_accumulated_cloud", 1, cloudCallback);
-    cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 1);
+    cloud_pub = nh.advertise<sensor_msgs::PointCloud2>("/cloud_pcl", 1);
 
     ros::spin();
     return 0;

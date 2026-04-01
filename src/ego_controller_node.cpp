@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
     
     ego_goal_pub_1 = nh.advertise<geometry_msgs::PoseStamped>("/goal", 1);
     ego_goal_pub_2 = nh.advertise<geometry_msgs::PoseStamped>("/uav1/goal", 1);
-    ego_goal_pub_3 = nh.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);
+    ego_goal_pub_3 = nh.advertise<geometry_msgs::PoseStamped>("/ego_planner/goal", 1);
 
     // 【破案修复】注册这把钥匙话题
     finish_ego_pub = nh.advertise<std_msgs::Bool>("/finish_ego", 10);
