@@ -51,18 +51,12 @@ roslaunch tutorial_gazebo sim.launch" C-m
 tmux select-layout -t $SESSION:0 tiled
 
 # ====================================================
-# 窗口 1: 感知与点云拉伸处理
+# 窗口 1: 感知与点云拉伸处理 (【调试阶段暂时封印】)
 # ====================================================
-tmux new-window -t $SESSION:1 -n "perception"
-# Pane 1.0: 跑你以前的 PCL 处理脚本，输出 /projected_accumulated_cloud
-tmux send-keys -t $SESSION:1.0 "sleep 8; source ${MAIN_WS}/devel/setup.zsh; cd ${MAIN_WS}/src/pcl_detection2/shell; zsh pcl_detection.sh" C-m
-
-# Pane 1.1: 跑点云拉伸节点，转成 3D 发给 Ego-Planner
-tmux split-window -h -t $SESSION:1
-tmux send-keys -t $SESSION:1.1 "export LANG=zh_CN.UTF-8; export LC_ALL=zh_CN.UTF-8; \
-echo '等待 Gazebo 启动...'; sleep 17; \
-source ${MAIN_WS}/devel/setup.zsh; rosrun uav_navigation cloud_extruder" C-m
-tmux select-layout -t $SESSION:1 tiled
+# tmux new-window -t $SESSION:1 -n "perception"
+# tmux send-keys -t $SESSION:1.0 "sleep 8; source ${MAIN_WS}/devel/setup.bash; cd ${MAIN_WS}/src/pcl_detection2/shell; bash pcl_detection.sh" C-m
+# tmux split-window -h -t $SESSION:1
+# tmux send-keys -t $SESSION:1.1 "export LANG=zh_CN.UTF-8; ... rosrun uav_navigation cloud_extruder" C-m
 
 # ====================================================
 # 窗口 2: 导航大脑与飞控执行 (这里是主战场)

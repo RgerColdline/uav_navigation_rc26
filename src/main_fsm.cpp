@@ -97,7 +97,7 @@ public:
                 state_start_time_ = ros::Time::now();
                 
                 // 【绝杀修复】恢复你老版本的 PCL 启动参数！
-                nh_.setParam("/pcl_enable", true);
+                //nh_.setParam("/pcl_enable", true);
                 ROS_INFO("[Boss] 到达起飞高度！/pcl_enable 已设为 true，等待点云积累...");
             }
             break;
