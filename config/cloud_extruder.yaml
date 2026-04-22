@@ -8,4 +8,4 @@ wall:
   step: 0.2
   intensity: 255.0
 
-intensity_threshold: 10.0
+intensity_threshold: 0.1

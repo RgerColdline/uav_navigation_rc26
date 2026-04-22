@@ -51,7 +51,7 @@
   <!-- ================================================================= -->
   <node pkg="uav_navigation" name="cloud_extruder" type="cloud_extruder" output="screen">
     <!-- 强度过滤阈值：数值越大，过滤掉的弱噪点越多。建议根据仿真/实测调整 -->
-    <rosparam file="$(find uav_navigation)/config/cloud_extruder.yaml" command="load" ns="uav_navigation"/>
+    <rosparam file="$(find uav_navigation)/config/cloud_extruder.yaml" command="load" />
   </node>
     
 </launch>
