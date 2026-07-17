@@ -106,16 +106,23 @@ public:
             publishSetpoint(Eigen::Vector2d(init_pos_.x(), init_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, init_yaw_);
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0) {
                 ROS_INFO(">>>[任务一] 地图载入完毕，下发目标点前往识别区！");
-                sendEgoGoal(wp_recog_); 
+                sendEgoGoal(wp_recog_);
                 current_state_ = MissionState::NAV_RECOG_AREA;
+                state_start_time_ = ros::Time::now();  // 记录NAV开始时间，用于超时检测
             }
             break;
 
         case MissionState::NAV_RECOG_AREA:
+            // 【兜底悬停】维持offboard指令流不中断，防止ego_controller停发时PX4触发failsafe
+            publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, current_yaw_);
             if (ego_nav_status_ == 2) {
                 current_state_ = MissionState::HOVER_RECOGNIZE;
                 state_start_time_ = ros::Time::now();
                 ROS_INFO(">>>[任务二] 到达识别区！执行定点悬停...");
+            } else if ((ros::Time::now() - state_start_time_).toSec() > 30.0) {
+                ROS_WARN("[Boss] NAV_RECOG_AREA 超时30s！ego导航无响应，强制进入悬停...");
+                current_state_ = MissionState::HOVER_RECOGNIZE;
+                state_start_time_ = ros::Time::now();
             }
             break;
 
@@ -124,11 +131,18 @@ public:
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0) {
                 sendEgoGoal(wp_airdrop_);
                 current_state_ = MissionState::NAV_AIRDROP_AREA;
+                state_start_time_ = ros::Time::now();  // 记录NAV开始时间
             }
             break;
 
         case MissionState::NAV_AIRDROP_AREA:
+            // 【兜底悬停】维持offboard指令流不中断
+            publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, current_yaw_);
             if (ego_nav_status_ == 2) {
+                current_state_ = MissionState::HOVER_AIRDROP;
+                state_start_time_ = ros::Time::now();
+            } else if ((ros::Time::now() - state_start_time_).toSec() > 30.0) {
+                ROS_WARN("[Boss] NAV_AIRDROP_AREA 超时30s！ego导航无响应，强制进入悬停...");
                 current_state_ = MissionState::HOVER_AIRDROP;
                 state_start_time_ = ros::Time::now();
             }
@@ -139,11 +153,18 @@ public:
             if ((ros::Time::now() - state_start_time_).toSec() > 3.0) {
                 sendEgoGoal(wp_strike_);
                 current_state_ = MissionState::NAV_STRIKE_AREA;
+                state_start_time_ = ros::Time::now();  // 记录NAV开始时间
             }
             break;
 
         case MissionState::NAV_STRIKE_AREA:
+            // 【兜底悬停】维持offboard指令流不中断
+            publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, current_yaw_);
             if (ego_nav_status_ == 2) {
+                current_state_ = MissionState::LASER_STRIKE;
+                state_start_time_ = ros::Time::now();
+            } else if ((ros::Time::now() - state_start_time_).toSec() > 30.0) {
+                ROS_WARN("[Boss] NAV_STRIKE_AREA 超时30s！ego导航无响应，强制进入激光打击...");
                 current_state_ = MissionState::LASER_STRIKE;
                 state_start_time_ = ros::Time::now();
             }
@@ -154,11 +175,17 @@ public:
             if ((ros::Time::now() - state_start_time_).toSec() > 2.0) {
                 sendEgoGoal(Eigen::Vector2d(init_pos_.x(), init_pos_.y()));
                 current_state_ = MissionState::RETURN_TO_LAUNCH;
+                state_start_time_ = ros::Time::now();  // 记录NAV开始时间
             }
             break;
 
         case MissionState::RETURN_TO_LAUNCH:
+            // 【兜底悬停】维持offboard指令流不中断
+            publishSetpoint(Eigen::Vector2d(current_pos_.x(), current_pos_.y()), Eigen::Vector2d(0, 0), init_pos_.z() + takeoff_height_, current_yaw_);
             if (ego_nav_status_ == 2) {
+                current_state_ = MissionState::LANDING;
+            } else if ((ros::Time::now() - state_start_time_).toSec() > 30.0) {
+                ROS_WARN("[Boss] RETURN_TO_LAUNCH 超时30s！ego导航无响应，强制降落...");
                 current_state_ = MissionState::LANDING;
             }
             break;
