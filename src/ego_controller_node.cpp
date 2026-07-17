@@ -47,7 +47,12 @@ void fsmGoalCallback(const geometry_msgs::PoseStamped::ConstPtr &msg) {
     hover_x = current_odom.pose.pose.position.x;
     hover_y = current_odom.pose.pose.position.y;
     hover_z = current_goal.pose.position.z;
-    hover_yaw = current_odom.pose.pose.orientation.z;
+    // 【修复】从四元数正确解算yaw角，而非错误地取orientation.z
+    double qw = current_odom.pose.pose.orientation.w;
+    double qx = current_odom.pose.pose.orientation.x;
+    double qy = current_odom.pose.pose.orientation.y;
+    double qz = current_odom.pose.pose.orientation.z;
+    hover_yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
 
     ego_goal_pub_1.publish(current_goal);
     ego_goal_pub_2.publish(current_goal);
@@ -105,6 +110,12 @@ int main(int argc, char **argv) {
             hover_x = current_odom.pose.pose.position.x;
             hover_y = current_odom.pose.pose.position.y;
             hover_z = current_odom.pose.pose.position.z;
+            // 【修复】轨迹中断时同步更新 hover_yaw 为当前正确yaw
+            double qw = current_odom.pose.pose.orientation.w;
+            double qx = current_odom.pose.pose.orientation.x;
+            double qy = current_odom.pose.pose.orientation.y;
+            double qz = current_odom.pose.pose.orientation.z;
+            hover_yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
         }
 
         mavros_msgs::PositionTarget setpoint;
@@ -160,6 +171,21 @@ int main(int argc, char **argv) {
                     last_retry_time = ros::Time::now();
                 }
             }
+        } else if (nav_state == ARRIVED) {
+            // 【兜底悬停】到达后继续发布悬停setpoint，填补main_fsm接管前的交接间隙，
+            // 防止offboard指令流中断导致PX4触发failsafe
+            mavros_msgs::PositionTarget setpoint;
+            setpoint.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+            setpoint.type_mask = 0b101111111000; // PX,PY,PZ used; V*,A* ignored; YAW_RATE ignored
+            setpoint.position.x = current_odom.pose.pose.position.x;
+            setpoint.position.y = current_odom.pose.pose.position.y;
+            setpoint.position.z = current_goal.pose.position.z;
+            double qw = current_odom.pose.pose.orientation.w;
+            double qx = current_odom.pose.pose.orientation.x;
+            double qy = current_odom.pose.pose.orientation.y;
+            double qz = current_odom.pose.pose.orientation.z;
+            setpoint.yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+            mavros_cmd_pub.publish(setpoint);
         }
         std_msgs::Int8 status_msg;
         status_msg.data = nav_state;
