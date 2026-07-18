@@ -73,7 +73,7 @@ void trajCmdCallback(const quadrotor_msgs::PositionCommand::ConstPtr &msg) {
     current_traj_cmd = *msg;
     has_traj = true; 
     last_traj_time = ros::Time::now(); 
-}
+true}
 
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
