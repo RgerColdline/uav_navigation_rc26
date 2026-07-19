@@ -23,7 +23,7 @@ geometry_msgs::PoseStamped current_goal;
 enum NavState { IDLE = 0, FLYING = 1, ARRIVED = 2 };
 NavState nav_state = IDLE;
 
-double arrive_radius = 0.2;
+double arrive_radius = 0.3;
 bool has_odom = false;
 bool has_traj = false;
 ros::Time last_traj_time;
@@ -72,8 +72,8 @@ void fsmGoalCallback(const geometry_msgs::PoseStamped::ConstPtr &msg) {
 void trajCmdCallback(const quadrotor_msgs::PositionCommand::ConstPtr &msg) {
     current_traj_cmd = *msg;
     has_traj = true; 
-    last_traj_time = ros::Time::now(); 
-true}
+    last_traj_time = ros::Time::now();
+}
 
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
@@ -107,9 +107,10 @@ int main(int argc, char **argv) {
         {
             ROS_ERROR("[Ego执行器] 警报！/position_cmd 数据流中断！降级为悬停模式！");
             has_traj = false;
-            hover_x = current_odom.pose.pose.position.x;
-            hover_y = current_odom.pose.pose.position.y;
-            hover_z = current_odom.pose.pose.position.z;
+            // 锁定在最后已知轨迹位置，防止飘走
+            hover_x = current_traj_cmd.position.x;
+            hover_y = current_traj_cmd.position.y;
+            hover_z = current_traj_cmd.position.z;
             // 【修复】轨迹中断时同步更新 hover_yaw 为当前正确yaw
             double qw = current_odom.pose.pose.orientation.w;
             double qx = current_odom.pose.pose.orientation.x;
@@ -150,10 +151,10 @@ int main(int argc, char **argv) {
                                   dist, setpoint.position.x, setpoint.position.y, setpoint.velocity.x, setpoint.velocity.y);
                 mavros_cmd_pub.publish(setpoint);
             } else {
-                setpoint.type_mask = 0b101111111000; // 纯位置悬停掩码
-                setpoint.position.x = hover_x;
-                setpoint.position.y = hover_y;
-                setpoint.position.z = hover_z;
+                setpoint.type_mask = 0b100111000111; // 速度零悬停（比位置模式更稳）
+                setpoint.velocity.x = 0.0;
+                setpoint.velocity.y = 0.0;
+                setpoint.velocity.z = 0.0;
                 setpoint.yaw = hover_yaw;
                 mavros_cmd_pub.publish(setpoint);
 
