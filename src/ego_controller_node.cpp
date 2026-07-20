@@ -33,6 +33,11 @@ double hover_y = 0.0;
 double hover_z = 0.0;
 double hover_yaw = 0.0;
 
+// 【影子模式】队友调用ego时，只产生RViz可视化（点云+路径），不做实际避障控制
+// 队友通过 /fsm/ego_goal 下发目标，ego_planner 正常规划，traj_server 正常吐轨迹
+// 但 /mavros/setpoint_raw/local 不发布，飞控由队友的节点接管
+bool shadow_mode = false;
+
 void odomCallback(const nav_msgs::Odometry::ConstPtr &msg) {
     current_odom = *msg;
     has_odom = true;
@@ -79,6 +84,20 @@ int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
     ros::init(argc, argv, "ego_controller_node");
     ros::NodeHandle nh("~");
+
+    // 【影子模式】读取参数，默认false（正常避障控制模式）
+    // true时：只做可视化（点云+路径），不向飞控发指令，队友负责实际避障
+    nh.param<bool>("shadow_mode", shadow_mode, false);
+    if (shadow_mode) {
+        ROS_INFO("===========================================");
+        ROS_INFO("[Ego执行器] ⚠️  影子模式已激活！");
+        ROS_INFO("[Ego执行器]   ✅ 目标转发 → ego_planner 规划");
+        ROS_INFO("[Ego执行器]   ✅ traj_server 轨迹生成");
+        ROS_INFO("[Ego执行器]   ✅ RViz 可视化（点云/栅格/路径）");
+        ROS_INFO("[Ego执行器]   ❌ /mavros/setpoint_raw/local — 不发布！");
+        ROS_INFO("[Ego执行器]   🤝 飞控由队友节点接管");
+        ROS_INFO("===========================================");
+    }
 
     ros::Subscriber odom_sub = nh.subscribe("/mavros/local_position/odom", 10, odomCallback);
     ros::Subscriber fsm_goal_sub = nh.subscribe("/fsm/ego_goal", 1, fsmGoalCallback);
@@ -147,16 +166,21 @@ int main(int argc, char **argv) {
                 setpoint.velocity.z = current_traj_cmd.velocity.z; 
                 setpoint.yaw = current_traj_cmd.yaw;
 
-                ROS_INFO_THROTTLE(1.0, "[Ego执行器] 追踪轨迹中 | 距终点:%.2fm | 发送指令: Pos(%.1f,%.1f) Vel(%.1f,%.1f)", 
-                                  dist, setpoint.position.x, setpoint.position.y, setpoint.velocity.x, setpoint.velocity.y);
-                mavros_cmd_pub.publish(setpoint);
+                ROS_INFO_THROTTLE(1.0, "[Ego执行器] 追踪轨迹中 | 距终点:%.2fm | 指令: Pos(%.1f,%.1f) Vel(%.1f,%.1f)%s",
+                                  dist, setpoint.position.x, setpoint.position.y, setpoint.velocity.x, setpoint.velocity.y,
+                                  shadow_mode ? " [影子模式-不发送]" : "");
+                if (!shadow_mode) {
+                    mavros_cmd_pub.publish(setpoint);
+                }
             } else {
                 setpoint.type_mask = 0b100111000111; // 速度零悬停（比位置模式更稳）
                 setpoint.velocity.x = 0.0;
                 setpoint.velocity.y = 0.0;
                 setpoint.velocity.z = 0.0;
                 setpoint.yaw = hover_yaw;
-                mavros_cmd_pub.publish(setpoint);
+                if (!shadow_mode) {
+                    mavros_cmd_pub.publish(setpoint);
+                }
 
                 if ((ros::Time::now() - last_retry_time).toSec() > 1.5) {
                     ego_goal_pub_1.publish(current_goal);
@@ -173,20 +197,24 @@ int main(int argc, char **argv) {
                 }
             }
         } else if (nav_state == ARRIVED) {
-            // 【兜底悬停】到达后继续发布悬停setpoint，填补main_fsm接管前的交接间隙，
-            // 防止offboard指令流中断导致PX4触发failsafe
-            mavros_msgs::PositionTarget setpoint;
-            setpoint.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
-            setpoint.type_mask = 0b101111111000; // PX,PY,PZ used; V*,A* ignored; YAW_RATE ignored
-            setpoint.position.x = current_odom.pose.pose.position.x;
-            setpoint.position.y = current_odom.pose.pose.position.y;
-            setpoint.position.z = current_goal.pose.position.z;
-            double qw = current_odom.pose.pose.orientation.w;
-            double qx = current_odom.pose.pose.orientation.x;
-            double qy = current_odom.pose.pose.orientation.y;
-            double qz = current_odom.pose.pose.orientation.z;
-            setpoint.yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
-            mavros_cmd_pub.publish(setpoint);
+            // 【兜底悬停】到达后维持悬停状态通知
+            // 影子模式下不往飞控发指令，队友节点负责实际悬停
+            if (!shadow_mode) {
+                mavros_msgs::PositionTarget setpoint;
+                setpoint.coordinate_frame = mavros_msgs::PositionTarget::FRAME_LOCAL_NED;
+                setpoint.type_mask = 0b101111111000; // PX,PY,PZ used; V*,A* ignored; YAW_RATE ignored
+                setpoint.position.x = current_odom.pose.pose.position.x;
+                setpoint.position.y = current_odom.pose.pose.position.y;
+                setpoint.position.z = current_goal.pose.position.z;
+                double qw = current_odom.pose.pose.orientation.w;
+                double qx = current_odom.pose.pose.orientation.x;
+                double qy = current_odom.pose.pose.orientation.y;
+                double qz = current_odom.pose.pose.orientation.z;
+                setpoint.yaw = std::atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz));
+                mavros_cmd_pub.publish(setpoint);
+            } else {
+                ROS_INFO_THROTTLE(2.0, "[Ego执行器] 已到达(影子模式) — 悬停由队友节点接管");
+            }
         }
         std_msgs::Int8 status_msg;
         status_msg.data = nav_state;

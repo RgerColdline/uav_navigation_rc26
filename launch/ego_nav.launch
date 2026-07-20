@@ -1,4 +1,12 @@
 <launch>
+  <!-- ============================================================ -->
+  <!--  shadow_mode:=true 时，ego只做可视化（点云+路径），不控制飞控 -->
+  <!--  队友通过 /fsm/ego_goal 下发目标，ego_planner 正常规划，    -->
+  <!--  但 /mavros/setpoint_raw/local 不发布，飞控由队友节点接管    -->
+  <!--  用法: roslaunch uav_navigation ego_nav.launch shadow_mode:=true -->
+  <!-- ============================================================ -->
+  <arg name="shadow_mode" default="false" />
+
   <!-- 注意 1：把所有的 find mission 全部替换为 find uav_navigation -->
   <include file="$(find uav_navigation)/launch/advanced_param.xml">
 
@@ -44,7 +52,9 @@
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find uav_navigation)/launch/ego.rviz" required="false" />
 
   <!-- 注意 3：在这里直接启动你用 C++ 写的 ego_controller_node -->
-  <node pkg="uav_navigation" name="ego_controller_node" type="ego_controller_node" output="screen" />
+  <node pkg="uav_navigation" name="ego_controller_node" type="ego_controller_node" output="screen">
+    <param name="shadow_mode" value="$(arg shadow_mode)" />
+  </node>
    <!-- ================================================================= -->
   <!-- 注意 4：【新增】点云拉伸与强度过滤节点 -->
   <!-- 它订阅 /projected_accumulated_cloud，发布 /cloud_pcl 给 Ego-Planner -->
