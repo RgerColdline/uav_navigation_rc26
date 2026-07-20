@@ -39,7 +39,7 @@
     <arg name="lambda_feasibility" value="0.2" />
     <arg name="lambda_fitness" value="3.3" />
     <arg name="swarm_clearance" value="0.2" />
-    <arg name="dist" value="0.17" />
+    <arg name="dist" value="0.09" />
     <arg name="flight_type" value="1" />
     <arg name="realworld_experiment" value="false" />
   </include>

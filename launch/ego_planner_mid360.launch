@@ -30,7 +30,7 @@
     <arg name="lambda_feasibility" value="0.1" />
     <arg name="lambda_fitness" value="1.3" />
     <arg name="swarm_clearance" value="0.5" />
-    <arg name="dist" value="0.20" />
+    <arg name="dist" value="0.09" />
     <!-- 1: use 2D Nav Goal to select goal  -->
     <!-- 2: use global waypoints below  -->
     <!-- 单机建议直接使用rviz指定目标点,多机情况请预设目标点 -->
